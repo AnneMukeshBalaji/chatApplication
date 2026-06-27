@@ -1,0 +1,4 @@
+app:
+  jwt:
+    secret: "bG9yZC1zaXZhLWlzLXRoZS1raW5nLWhlLXdpbGwtc2F2ZS15b3UtZnJvbS1hbGwta2luZHMtb2YtZGFuZ2Vy"
+    expiration-ms: 86400000
