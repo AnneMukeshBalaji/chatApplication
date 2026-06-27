@@ -30,12 +30,14 @@ public class User {
   @Column(name = "id", updatable = false)
   private UUID id;
   @Column(name = "user_name", nullable = false, unique = true)
-  private String name;
+  private String userName;
   @Column(name = "hashed_password", nullable = false)
   // NOTE: since Bcrypt is collision - resistant i will not use unique = true
   private String hashedPassword;
   @Column(name = "is_online", nullable = false)
   private boolean online;
+  @Column(name = "email",nullable = false)
+  private String email;
   @CreationTimestamp
   @Column(name = "created_at", nullable = false)
   private LocalDateTime createdAt;
