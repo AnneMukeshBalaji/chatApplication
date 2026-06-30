@@ -1,6 +1,7 @@
 package com.chatApplication.backend.security;
 
 import java.util.Date;
+import java.util.UUID;
 
 import javax.crypto.SecretKey;
 
@@ -25,13 +26,22 @@ public class JwtService {
     byte [] keyBytes = Decoders.BASE64.decode(secretString);
     this.secretKey = Keys.hmacShaKeyFor(keyBytes);
   }
-  
-  public String generateToken(String email){
+
+  public String generateToken(UUID userId){
     return Jwts.builder()
-      .subject(email)
+      .subject(userId.toString())
       .issuedAt(new Date(System.currentTimeMillis()))
       .expiration(new Date(System.currentTimeMillis()+expirationMs))
       .signWith(secretKey)
       .compact();
+  }
+  public UUID extractUserId(String token){
+    String userIdstr = Jwts.parser()
+      .verifyWith(secretKey)
+      .build()
+      .parseSignedClaims(token)
+      .getPayload()
+      .getSubject();
+    return  UUID.fromString(userIdstr);
   }
 }

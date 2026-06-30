@@ -12,4 +12,5 @@ import com.chatApplication.backend.entity.User;
 public interface UserRepository extends
     JpaRepository<User, UUID> {
   Optional<User> findByEmail(String email);
+  Optional<User> findByUserName(String userName);
 }

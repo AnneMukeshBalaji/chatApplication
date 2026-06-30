@@ -5,9 +5,9 @@ app:
 
 spring:
   datasource:
-    url: "${DB_URL: jdbc:postgresql://localhost:5432/chat_application}"
-    username: "${DB_USERNAME : luffy}"
-    password: "${DB_PASSWORD : luffy}"
+    url: "${DB_URL:jdbc:postgresql://localhost:5432/chat_application}"
+    username: "${DB_USERNAME:luffy}"
+    password: "${DB_PASSWORD:luffy}"
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -19,6 +19,6 @@ spring:
         format_sql: true
   jackson:
     serialization:
-      write-dates-as-timestamps: false
+      indent-output: false
 server:
   port: 8080
