@@ -1,13 +1,14 @@
 import { useState, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useNavigate } from 'react-router-dom'
+import { apiService } from '../service/apiService'
 import Avatar    from '../components/Avatar'
 import NeuInput  from '../components/NeuInput'
 import NeuButton from '../components/NeuButton'
 import Toast     from '../components/Toast'
 
 export default function ProfilePage({ onClose }) {
-  const { currentUser, login, logout } = useAuth()
+  const { currentUser, login, logout, updateUser } = useAuth()
   const navigate = useNavigate()
 
   const [username,   setUsername]   = useState(currentUser?.username || '')
@@ -34,9 +35,18 @@ export default function ProfilePage({ onClose }) {
     }
     setSaving(true)
     try {
-      login({ ...currentUser, username, email, status, avatarUrl,
-        initial: username[0].toUpperCase() })
+      const updated = await apiService.updateProfile(username, email)
+      // Update AuthContext with fresh server data
+      updateUser({
+        username: updated.userName || username,
+        email,
+        status,
+        avatarUrl,
+        initial: (updated.userName || username)[0].toUpperCase(),
+      })
       setToast({ message: 'Profile updated!', type: 'success' })
+    } catch (err) {
+      setToast({ message: err.message || 'Failed to update profile', type: 'error' })
     } finally {
       setSaving(false)
     }
@@ -57,8 +67,11 @@ export default function ProfilePage({ onClose }) {
     }
     setSaving(true)
     try {
+      await apiService.changePassword(oldPass, newPass)
       setOldPass(''); setNewPass(''); setConfirmPass('')
       setToast({ message: 'Password changed!', type: 'success' })
+    } catch (err) {
+      setToast({ message: err.message || 'Failed to change password', type: 'error' })
     } finally {
       setSaving(false)
     }

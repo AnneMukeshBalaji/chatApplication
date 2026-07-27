@@ -1,75 +1,215 @@
-// ── REST API Service ─────────────────────────────────────────────
-// Stubs only. In integration round, uncomment fetch calls and point
-// BASE_URL at your Spring Boot server.
-
+// ── REST API Service (Integrated with Spring Boot backend) ────────────────
 const BASE_URL = 'http://localhost:8080/api'
 
+// Helper to get the stored token
+const getToken = () => localStorage.getItem('neochat_token')
+
+// Helper for authenticated fetch
+const authFetch = async (url, options = {}) => {
+  const token = getToken()
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers,
+  }
+  const response = await fetch(url, { ...options, headers })
+  if (response.status === 401) {
+    // Token expired — clear storage
+    localStorage.removeItem('neochat_token')
+    localStorage.removeItem('neochat_user')
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  return response
+}
+
 export const apiService = {
-  login: async (username, _password) => {
-    // TODO: POST ${BASE_URL}/auth/login
-    return { success: true, token: 'mock-jwt', user: { username } }
+  // ── Auth ──────────────────────────────────────────────────────────────
+  login: async (email, password) => {
+    const res = await fetch(`${BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(text || 'Login failed')
+    }
+    const data = await res.json()
+    // Store token immediately so subsequent calls are authenticated
+    if (data.token) localStorage.setItem('neochat_token', data.token)
+    return {
+      success: true,
+      token: data.token,
+      user: data.user,
+    }
   },
 
-  register: async (displayName, username, _password) => {
-    // TODO: POST ${BASE_URL}/auth/register
-    return { success: true, token: 'mock-jwt', user: { username, displayName } }
+  register: async (userName, email, password) => {
+    const res = await fetch(`${BASE_URL}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userName, email, password }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(text || 'Registration failed')
+    }
+    const data = await res.json()
+    if (data.token) localStorage.setItem('neochat_token', data.token)
+    return {
+      success: true,
+      token: data.token,
+      user: data.user,
+    }
   },
 
   logout: async () => {
-    // TODO: POST ${BASE_URL}/auth/logout
+    try {
+      await authFetch(`${BASE_URL}/auth/logout`, { method: 'POST' })
+    } catch {
+      // Proceed with local logout even if server call fails
+    }
+    localStorage.removeItem('neochat_token')
+    localStorage.removeItem('neochat_user')
     return { success: true }
   },
 
-  getUsers: async () => MOCK_USERS,
+  // ── Users ─────────────────────────────────────────────────────────────
+  getUsers: async () => {
+    const res = await authFetch(`${BASE_URL}/users`)
+    if (!res.ok) return []
+    const data = await res.json()
+    // Map backend UserResponse { id, userName, online } to frontend shape
+    return data.map(u => ({
+      id:      u.id,
+      name:    u.userName,
+      initial: (u.userName || '?')[0].toUpperCase(),
+      online:  u.online,
+      time:    '',
+      preview: '',
+      unread:  0,
+    }))
+  },
 
-  getHistory: async (userId) => MOCK_MESSAGES[userId] || [],
+  // ── Messages ──────────────────────────────────────────────────────────
+  getHistory: async (userId) => {
+    const res = await authFetch(`${BASE_URL}/messages/${userId}`)
+    if (!res.ok) return []
+    const data = await res.json()
+    const myId = (() => {
+      try { return JSON.parse(localStorage.getItem('neochat_user'))?.id } catch { return null }
+    })()
+    return data.map(m => ({
+      id:     m.id,
+      from:   m.senderId === myId ? 'me' : 'them',
+      text:   m.content,
+      time:   m.sentAt ? new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+      status: m.status || null,
+    }))
+  },
 
-  sendMessage: async (_recipientId, _content) => {
-    // TODO: POST ${BASE_URL}/messages/send
-    return { id: Date.now(), status: 'PENDING' }
+  sendMessage: async (recipientId, content) => {
+    const res = await authFetch(`${BASE_URL}/messages/send`, {
+      method: 'POST',
+      body: JSON.stringify({ recipientId, content }),
+    })
+    if (!res.ok) return { id: Date.now(), status: 'PENDING' }
+    return await res.json()
+  },
+
+  // ── Profile ───────────────────────────────────────────────────────────
+  updateProfile: async (userName, email) => {
+    const res = await authFetch(`${BASE_URL}/users/profile`, {
+      method: 'PUT',
+      body: JSON.stringify({ userName, email }),
+    })
+    if (!res.ok) throw new Error('Profile update failed')
+    return await res.json()
+  },
+
+  changePassword: async (currentPassword, newPassword) => {
+    const res = await authFetch(`${BASE_URL}/users/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    })
+    if (!res.ok) throw new Error('Password change failed')
+    return true
   },
 }
 
-// ── WebSocket Service ────────────────────────────────────────────
-// Wire up SockJS + STOMP in integration round.
+// ── WebSocket Service (SockJS + STOMP) ───────────────────────────────────
+import { Client } from '@stomp/stompjs'
+import SockJS from 'sockjs-client/dist/sockjs.js'
+
+let stompClient = null
+
 export const wsService = {
-  connect: (_token, _onMessage, _onStatus, _onPresence) => {
-    // const socket = new SockJS(`${BASE_URL}/ws`)
-    // const client = Stomp.over(socket)
-    // client.connect({ Authorization: `Bearer ${_token}` }, () => {
-    //   client.subscribe('/user/queue/messages', _onMessage)
-    //   client.subscribe('/user/queue/status',   _onStatus)
-    //   client.subscribe('/topic/presence',      _onPresence)
-    // })
+  connect: (token, onMessage, onStatus, onPresence) => {
+    if (stompClient?.active) return
+
+    stompClient = new Client({
+      webSocketFactory: () => new SockJS(`http://localhost:8080/ws`),
+      connectHeaders: {
+        Authorization: `Bearer ${token}`,
+      },
+      reconnectDelay: 5000,
+      onConnect: () => {
+        stompClient.subscribe('/user/queue/messages', (frame) => {
+          try {
+            const msg = JSON.parse(frame.body)
+            if (onMessage) onMessage(msg)
+          } catch { /* ignore parse errors */ }
+        })
+        stompClient.subscribe('/user/queue/status', (frame) => {
+          try {
+            const statusUpdate = JSON.parse(frame.body)
+            if (onStatus) onStatus(statusUpdate)
+          } catch { /* ignore */ }
+        })
+        stompClient.subscribe('/topic/presence', (frame) => {
+          try {
+            const presence = JSON.parse(frame.body)
+            if (onPresence) onPresence(presence)
+          } catch { /* ignore */ }
+        })
+      },
+      onStompError: (frame) => {
+        console.error('STOMP error:', frame.headers?.message)
+      },
+    })
+
+    stompClient.activate()
   },
-  disconnect:   () => {},
-  sendMessage:  (_recipientId, _content)  => {},
-  markDelivered:(_messageId)              => {},
-  markRead:     (_messageId)              => {},
-}
 
-// ── Mock data ────────────────────────────────────────────────────
-export const MOCK_USERS = [
-  { id: 1, name: 'Sara Williams',   initial: 'S', online: true,  time: '2m',  preview: 'Sounds great! 👍',   unread: 2 },
-  { id: 2, name: 'Marcus Chen',     initial: 'M', online: true,  time: '15m', preview: 'Can we reschedule?',  unread: 0 },
-  { id: 3, name: 'Priya Patel',     initial: 'P', online: false, time: '1h',  preview: 'Thanks for the help', unread: 0 },
-  { id: 4, name: 'James K.',        initial: 'J', online: true,  time: '3h',  preview: 'On my way!',          unread: 1 },
-  { id: 5, name: 'Elena Rodriguez', initial: 'E', online: false, time: 'Sun', preview: 'See you then',        unread: 0 },
-]
+  disconnect: () => {
+    if (stompClient?.active) {
+      stompClient.deactivate()
+    }
+    stompClient = null
+  },
 
-export const MOCK_MESSAGES = {
-  1: [
-    { id: 1, from: 'them', text: 'Hey! Are you free tomorrow afternoon?',  time: '10:22 AM', status: null },
-    { id: 2, from: 'me',   text: 'Yes, after 2pm works for me.',           time: '10:24 AM', status: 'READ' },
-    { id: 3, from: 'them', text: "Perfect. Let's meet at the usual place?",time: '10:25 AM', status: null },
-    { id: 4, from: 'me',   text: 'Sounds great! 👍',                       time: '10:26 AM', status: 'DELIVERED' },
-  ],
-  2: [
-    { id: 5, from: 'me',   text: 'Hey Marcus, the meeting is at 3pm.',     time: '9:00 AM',  status: 'READ' },
-    { id: 6, from: 'them', text: 'Can we reschedule? Something came up.',  time: '9:15 AM',  status: null },
-  ],
-  3: [
-    { id: 7, from: 'me',   text: 'Did you get the files I sent?',          time: 'Yesterday',status: 'READ' },
-    { id: 8, from: 'them', text: 'Thanks for the help',                    time: 'Yesterday',status: null },
-  ],
+  sendMessage: (recipientId, content) => {
+    if (!stompClient?.active) return
+    stompClient.publish({
+      destination: '/app/chat.send',
+      body: JSON.stringify({ recipientId, content }),
+    })
+  },
+
+  markDelivered: (messageId) => {
+    if (!stompClient?.active) return
+    stompClient.publish({
+      destination: '/app/chat.delivered',
+      body: JSON.stringify({ messageId }),
+    })
+  },
+
+  markRead: (messageId) => {
+    if (!stompClient?.active) return
+    stompClient.publish({
+      destination: '/app/chat.read',
+      body: JSON.stringify({ messageId }),
+    })
+  },
 }

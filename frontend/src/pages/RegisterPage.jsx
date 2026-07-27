@@ -30,13 +30,13 @@ export default function RegisterPage() {
     try {
       const res = await apiService.register(username, email, password)
       if (res.success) {
-        login(res.user.username)
+        login(res.user, res.token)
         navigate('/chat')
       } else {
         setToast({ message: 'Registration failed', type: 'error' })
       }
-    } catch {
-      setToast({ message: 'Something went wrong', type: 'error' })
+    } catch (err) {
+      setToast({ message: err.message || 'Registration failed. Try a different username or email.', type: 'error' })
     } finally {
       setLoading(false)
     }

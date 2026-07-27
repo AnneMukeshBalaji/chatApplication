@@ -24,13 +24,13 @@ export default function LoginPage() {
     try {
       const res = await apiService.login(email, password)
       if (res.success) {
-        login(res.user.username)
+        login(res.user, res.token)
         navigate('/chat')
       } else {
         setToast({ message: 'Invalid credentials', type: 'error' })
       }
-    } catch {
-      setToast({ message: 'Something went wrong', type: 'error' })
+    } catch (err) {
+      setToast({ message: err.message || 'Invalid email or password', type: 'error' })
     } finally {
       setLoading(false)
     }

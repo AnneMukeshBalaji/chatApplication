@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { apiService } from '../service/apiService'
+import { apiService, wsService } from '../service/apiService'
 import UserList    from '../components/UserList'
 import ChatWindow  from '../components/ChatWindow'
 import MessageInput from '../components/MessageInput'
@@ -10,7 +10,7 @@ import Toast       from '../components/Toast'
 import ProfilePage from './ProfilePage'
 
 export default function ChatPage() {
-  const { currentUser } = useAuth()
+  const { currentUser, token } = useAuth()
   const navigate = useNavigate()
 
   const [users,       setUsers]       = useState([])
@@ -19,27 +19,82 @@ export default function ChatPage() {
   const [typing,      setTyping]      = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [toast,       setToast]       = useState(null)
-  // mobile: whether to show chat panel (vs sidebar)
   const [mobileShowChat, setMobileShowChat] = useState(false)
+
+  const selectedRef = useRef(selected)
+  useEffect(() => { selectedRef.current = selected }, [selected])
 
   // Redirect if not logged in
   useEffect(() => {
     if (!currentUser) navigate('/login')
   }, [currentUser, navigate])
 
-  // Load users
+  // Load users from real backend
   useEffect(() => {
-    apiService.getUsers().then(setUsers)
-  }, [])
+    if (!currentUser) return
+    apiService.getUsers().then(setUsers).catch(() => {
+      setToast({ message: 'Failed to load contacts', type: 'error' })
+    })
+  }, [currentUser])
+
+  // Connect WebSocket when we have a token
+  useEffect(() => {
+    if (!token) return
+
+    wsService.connect(
+      token,
+      // onMessage: incoming real-time message
+      (msg) => {
+        const myId = currentUser?.id
+        const incomingMsg = {
+          id:     msg.id,
+          from:   msg.senderId === myId ? 'me' : 'them',
+          text:   msg.content,
+          time:   new Date(msg.sentAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          status: msg.status || null,
+        }
+
+        // Update messages if this conversation is currently open
+        if (selectedRef.current?.id === msg.senderId || selectedRef.current?.id === msg.recipientId) {
+          setMessages(prev => [...(prev || []), incomingMsg])
+        }
+
+        // Update user list preview
+        setUsers(prev => prev.map(u =>
+          u.id === msg.senderId
+            ? { ...u, preview: msg.content, time: 'now', unread: (selectedRef.current?.id === u.id) ? 0 : (u.unread || 0) + 1 }
+            : u
+        ))
+      },
+      // onStatus: message status updates
+      (statusUpdate) => {
+        setMessages(prev => prev?.map(m =>
+          m.id === statusUpdate.messageId ? { ...m, status: statusUpdate.status } : m
+        ))
+      },
+      // onPresence: user online/offline
+      (presence) => {
+        setUsers(prev => prev.map(u =>
+          u.id === presence.userId ? { ...u, online: presence.online } : u
+        ))
+      }
+    )
+
+    return () => {
+      wsService.disconnect()
+    }
+  }, [token, currentUser])
 
   const handleSelectUser = async (user) => {
     setSelected(user)
-    const history = await apiService.getHistory(user.id)
-    setMessages(history)
+    try {
+      const history = await apiService.getHistory(user.id)
+      setMessages(history)
+    } catch {
+      setMessages([])
+      setToast({ message: 'Could not load conversation history', type: 'error' })
+    }
     setUsers(prev => prev.map(u => u.id === user.id ? { ...u, unread: 0 } : u))
-    setTimeout(() => setTyping(true),  1500)
-    setTimeout(() => setTyping(false), 4000)
-    // On mobile, slide to chat view
     setMobileShowChat(true)
   }
 
@@ -58,8 +113,9 @@ export default function ChatPage() {
       url:  f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
     }))
 
+    const tempId = `temp-${Date.now()}`
     const tempMsg = {
-      id:     Date.now(),
+      id:     tempId,
       from:   'me',
       text,
       time:   new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -72,19 +128,25 @@ export default function ChatPage() {
       u.id === selected.id ? { ...u, preview: text, time: 'now' } : u
     ))
 
-    await apiService.sendMessage(selected.id, text)
+    try {
+      // Try WebSocket first (faster), fall back to REST
+      if (wsService && token) {
+        wsService.sendMessage(selected.id, text)
+      } else {
+        await apiService.sendMessage(selected.id, text)
+      }
 
-    setTimeout(() => {
-      setMessages(prev => prev.map(m =>
-        m.id === tempMsg.id ? { ...m, status: 'DELIVERED' } : m
+      setTimeout(() => {
+        setMessages(prev => prev?.map(m =>
+          m.id === tempId ? { ...m, status: 'DELIVERED' } : m
+        ))
+      }, 800)
+    } catch {
+      setMessages(prev => prev?.map(m =>
+        m.id === tempId ? { ...m, status: 'FAILED' } : m
       ))
-    }, 800)
-
-    setTimeout(() => {
-      setMessages(prev => prev.map(m =>
-        m.id === tempMsg.id ? { ...m, status: 'READ' } : m
-      ))
-    }, 2200)
+      setToast({ message: 'Failed to send message', type: 'error' })
+    }
   }
 
   if (!currentUser) return null
